@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published ]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64, x86, aarch64]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install maturin
+    - name: Build wheels
+      run: |
+        maturin build --release --target ${{ matrix.target }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheels-linux-${{ matrix.target }}
+        path: target/wheels/*.whl
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x64, x86]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        architecture: ${{ matrix.target }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install maturin
+    - name: Build wheels
+      run: |
+        maturin build --release --target ${{ matrix.target }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheels-windows-${{ matrix.target }}
+        path: target/wheels/*.whl
+
+  macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install maturin
+    - name: Build wheels
+      run: |
+        maturin build --release --target ${{ matrix.target }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheels-macos-${{ matrix.target }}
+        path: target/wheels/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    - name: Build sdist
+      run: |
+        python -m pip install --upgrade pip
+        pip install maturin
+        maturin sdist
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sdist
+        path: target/wheels/*.tar.gz
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    needs: [linux, windows, macos, sdist]
+    steps:
+    - uses: actions/download-artifact@v4
+    - name: Display structure of downloaded files
+      run: ls -R
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        skip_existing: true
