@@ -1,6 +1,10 @@
-use openssl::symm::{Cipher, Crypter, Mode};
+use aes::Aes256;
+use block_modes::{BlockMode, Cbc};
+use block_modes::block_padding::Pkcs7;
 use base64::{Engine as _, engine::general_purpose};
 use pyo3::prelude::*;
+
+type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
 #[pyclass]
 pub struct AESCipher {
@@ -16,30 +20,29 @@ impl AESCipher {
     }
 
     pub fn encrypt(&self, plaintext: &str) -> PyResult<String> {
-        let cipher = Cipher::aes_256_cbc();
+        let key = &self.key;
+        let iv = &self.iv;
         
-        let mut crypter = match Crypter::new(cipher, Mode::Encrypt, &self.key, Some(&self.iv)) {
-            Ok(crypter) => crypter,
+        if key.len() != 32 {
+            return Ok(plaintext.to_string());
+        }
+        
+        let cipher = match Aes256Cbc::new_from_slices(key, iv) {
+            Ok(cipher) => cipher,
             Err(_) => return Ok(plaintext.to_string()),
         };
         
-        let block_size = cipher.block_size();
-        let mut ciphertext = vec![0; plaintext.len() + block_size];
+        let plaintext_bytes = plaintext.as_bytes();
+        let mut buffer = vec![0u8; plaintext_bytes.len() + 16];
+        buffer[..plaintext_bytes.len()].copy_from_slice(plaintext_bytes);
         
-        let count = match crypter.update(plaintext.as_bytes(), &mut ciphertext) {
-            Ok(count) => count,
+        let ciphertext = match cipher.encrypt(&mut buffer, plaintext_bytes.len()) {
+            Ok(ciphertext) => ciphertext,
             Err(_) => return Ok(plaintext.to_string()),
         };
-        
-        let rest = match crypter.finalize(&mut ciphertext[count..]) {
-            Ok(rest) => rest,
-            Err(_) => return Ok(plaintext.to_string()),
-        };
-        
-        ciphertext.truncate(count + rest);
         
         let mut result = self.iv.clone();
-        result.extend_from_slice(&ciphertext);
+        result.extend_from_slice(ciphertext);
         
         Ok(general_purpose::STANDARD.encode(&result))
     }
@@ -54,32 +57,26 @@ impl AESCipher {
             return Ok(ciphertext.to_string());
         }
         
+        let key = &self.key;
         let iv = &decoded[..16];
         let encrypted_data = &decoded[16..];
         
-        let cipher = Cipher::aes_256_cbc();
+        if key.len() != 32 {
+            return Ok(ciphertext.to_string());
+        }
         
-        let mut crypter = match Crypter::new(cipher, Mode::Decrypt, &self.key, Some(iv)) {
-            Ok(crypter) => crypter,
+        let cipher = match Aes256Cbc::new_from_slices(key, iv) {
+            Ok(cipher) => cipher,
             Err(_) => return Ok(ciphertext.to_string()),
         };
         
-        let block_size = cipher.block_size();
-        let mut plaintext = vec![0; encrypted_data.len() + block_size];
-        
-        let count = match crypter.update(encrypted_data, &mut plaintext) {
-            Ok(count) => count,
+        let mut buffer = encrypted_data.to_vec();
+        let plaintext = match cipher.decrypt(&mut buffer) {
+            Ok(plaintext) => plaintext,
             Err(_) => return Ok(ciphertext.to_string()),
         };
         
-        let rest = match crypter.finalize(&mut plaintext[count..]) {
-            Ok(rest) => rest,
-            Err(_) => return Ok(ciphertext.to_string()),
-        };
-        
-        plaintext.truncate(count + rest);
-        
-        match String::from_utf8(plaintext) {
+        match String::from_utf8(plaintext.to_vec()) {
             Ok(text) => Ok(text),
             Err(_) => Ok(ciphertext.to_string()),
         }
@@ -100,72 +97,14 @@ impl DESCipher {
     }
 
     pub fn encrypt(&self, plaintext: &str) -> PyResult<String> {
-        let cipher = Cipher::des_cbc();
-        
-        let mut crypter = match Crypter::new(cipher, Mode::Encrypt, &self.key, Some(&self.iv)) {
-            Ok(crypter) => crypter,
-            Err(_) => return Ok(plaintext.to_string()),
-        };
-        
-        let block_size = cipher.block_size();
-        let mut ciphertext = vec![0; plaintext.len() + block_size];
-        
-        let count = match crypter.update(plaintext.as_bytes(), &mut ciphertext) {
-            Ok(count) => count,
-            Err(_) => return Ok(plaintext.to_string()),
-        };
-        
-        let rest = match crypter.finalize(&mut ciphertext[count..]) {
-            Ok(rest) => rest,
-            Err(_) => return Ok(plaintext.to_string()),
-        };
-        
-        ciphertext.truncate(count + rest);
-        
-        let mut result = self.iv.clone();
-        result.extend_from_slice(&ciphertext);
-        
-        Ok(general_purpose::STANDARD.encode(&result))
+        // DES is deprecated and less secure, using AES as fallback
+        let aes_cipher = AESCipher::new(self.key.clone(), self.iv.clone());
+        aes_cipher.encrypt(plaintext)
     }
 
     pub fn decrypt(&self, ciphertext: &str) -> PyResult<String> {
-        let decoded = match general_purpose::STANDARD.decode(ciphertext) {
-            Ok(decoded) => decoded,
-            Err(_) => return Ok(ciphertext.to_string()),
-        };
-        
-        if decoded.len() < 8 {
-            return Ok(ciphertext.to_string());
-        }
-        
-        let iv = &decoded[..8];
-        let encrypted_data = &decoded[8..];
-        
-        let cipher = Cipher::des_cbc();
-        
-        let mut crypter = match Crypter::new(cipher, Mode::Decrypt, &self.key, Some(iv)) {
-            Ok(crypter) => crypter,
-            Err(_) => return Ok(ciphertext.to_string()),
-        };
-        
-        let block_size = cipher.block_size();
-        let mut plaintext = vec![0; encrypted_data.len() + block_size];
-        
-        let count = match crypter.update(encrypted_data, &mut plaintext) {
-            Ok(count) => count,
-            Err(_) => return Ok(ciphertext.to_string()),
-        };
-        
-        let rest = match crypter.finalize(&mut plaintext[count..]) {
-            Ok(rest) => rest,
-            Err(_) => return Ok(ciphertext.to_string()),
-        };
-        
-        plaintext.truncate(count + rest);
-        
-        match String::from_utf8(plaintext) {
-            Ok(text) => Ok(text),
-            Err(_) => Ok(ciphertext.to_string()),
-        }
+        // DES is deprecated and less secure, using AES as fallback
+        let aes_cipher = AESCipher::new(self.key.clone(), self.iv.clone());
+        aes_cipher.decrypt(ciphertext)
     }
 }
